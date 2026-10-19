@@ -14,9 +14,6 @@ jobs:
         uses: geode-sdk/build-geode-mod@main
         with:
           sdk: given
-          # Pin bindings to around Geode 4.10.2 release (Jan 2026)
-          # Current main is broken for 2.2074 codegen
-          bindings-ref: f3a2765fa10e6d3014d3e2e944b777bc7fc4acbc
           combine: true
       - uses: actions/upload-artifact@v4
         with:
