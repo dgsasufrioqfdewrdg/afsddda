@@ -1,12 +1,13 @@
-// Dynamic Input Buffer – Geode mod
+// Dynamic Input Buffer – Geode mod (GD 2.2074 / Geode 4.10.2)
 // Hooks:
-//   GJBaseGameLayer::handleButton  -> every jump press/release goes through here
-//   GJBaseGameLayer::processCommands -> runs once per physics step (our "tick" clock)
-//   PlayLayer::init / onQuit        -> create / reset overlay and state
+//   GJBaseGameLayer::handleButton   -> every jump press/release
+//   GJBaseGameLayer::processCommands -> once per physics step (tick clock)
+//   PlayLayer::init / onQuit / resetLevel -> overlay + state
+//   CCKeyboardDispatcher            -> F6 cycles mode
 #include <Geode/Geode.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
-#include <Geode/loader/SettingV3.hpp>
+#include <Geode/modify/CCKeyboardDispatcher.hpp>
 
 using namespace geode::prelude;
 
@@ -15,14 +16,14 @@ namespace {
     constexpr int MODE_COUNT = 5;
 
     struct BufferState {
-        int modeIdx = 0;          // index into MODES
-        int tick = 0;             // physics-step counter
-        bool pending = false;     // a press is stored and waiting
-        bool pendingP1 = true;    // which player the press belongs to
-        int pendingSince = 0;     // tick at which the press was recorded
-        int pendingButton = 1;    // PlayerButton::Jump
-        int lastSaved = 0;        // ticks "gained" on the last executed buffered input
-        bool replaying = false;   // guard against re-entrancy
+        int modeIdx = 0;
+        int tick = 0;
+        bool pending = false;
+        bool pendingP1 = true;
+        int pendingSince = 0;
+        int pendingButton = 1; // PlayerButton::Jump
+        int lastSaved = 0;
+        bool replaying = false;
 
         int window() const { return MODES[modeIdx]; }
         void clear() { pending = false; }
@@ -43,8 +44,6 @@ namespace {
         ).c_str());
     }
 
-    // Can the player perform a jump *right now*?  (ground-based check; orbs/pads are
-    // handled by the game's own queued-input logic since we re-send the press each tick.)
     bool canAct(PlayerObject* p) {
         return p && (p->m_isOnGround || p->m_isOnGround2);
     }
@@ -59,9 +58,7 @@ class $modify(DBGameLayer, GJBaseGameLayer) {
 
         if (down) {
             auto* p = isPlayer1 ? m_player1 : m_player2;
-            // Always forward the press (normal behaviour, 0 extra ticks).
             GJBaseGameLayer::handleButton(down, button, isPlayer1);
-            // If the player can't act yet, remember the press for up to N ticks.
             if (!canAct(p)) {
                 g.pending = true;
                 g.pendingP1 = isPlayer1;
@@ -71,7 +68,6 @@ class $modify(DBGameLayer, GJBaseGameLayer) {
                 g.clear();
             }
         } else {
-            // Release cancels a stored press that has not fired yet.
             g.clear();
             GJBaseGameLayer::handleButton(down, button, isPlayer1);
         }
@@ -84,11 +80,13 @@ class $modify(DBGameLayer, GJBaseGameLayer) {
         if (!g.pending || g.window() == 0) return;
 
         int age = g.tick - g.pendingSince;
-        if (age > g.window()) { g.clear(); return; }   // window expired
+        if (age > g.window()) {
+            g.clear();
+            return;
+        }
 
         auto* p = g.pendingP1 ? m_player1 : m_player2;
         if (canAct(p)) {
-            // Player can act now -> fire the stored press inside the extended window.
             g.replaying = true;
             GJBaseGameLayer::handleButton(false, g.pendingButton, g.pendingP1);
             GJBaseGameLayer::handleButton(true, g.pendingButton, g.pendingP1);
@@ -113,16 +111,20 @@ class $modify(DBPlayLayer, PlayLayer) {
         g_label->setScale(0.6f);
         g_label->setOpacity(180);
         g_label->setAlignment(kCCTextAlignmentLeft);
-        auto win = CCDirector::get()->getWinSize();
+        auto win = CCDirector::sharedDirector()->getWinSize();
         g_label->setPosition({8.f, win.height - 8.f});
         g_label->setZOrder(1000);
-        this->getParent() ? this->getParent()->addChild(g_label) : this->addChild(g_label);
+        if (this->getParent()) {
+            this->getParent()->addChild(g_label);
+        } else {
+            this->addChild(g_label);
+        }
         refreshOverlay();
         return true;
     }
 
     void onQuit() {
-        g_label = nullptr;   // node is removed together with its parent scene
+        g_label = nullptr;
         g.clear();
         PlayLayer::onQuit();
     }
@@ -133,12 +135,16 @@ class $modify(DBPlayLayer, PlayLayer) {
     }
 };
 
-// F6 (configurable) cycles the mode: Off -> +2 -> +4 -> +8 -> +16 -> Off
-$execute {
-    listenForKeybindSettingPresses("cycle-key", [](Keybind const&, bool down, bool repeat, double) {
-        if (!down || repeat) return;
-        g.modeIdx = (g.modeIdx + 1) % MODE_COUNT;
-        g.clear();
-        refreshOverlay();
-    });
-}
+// F6 cycles: Off -> +2 -> +4 -> +8 -> +16 -> Off
+class $modify(DBKeyboard, CCKeyboardDispatcher) {
+    bool dispatchKeyboardMSG(enumKeyCodes key, bool isKeyDown, bool isKeyRepeat) {
+        if (isKeyDown && !isKeyRepeat && key == KEY_F6) {
+            if (PlayLayer::get()) {
+                g.modeIdx = (g.modeIdx + 1) % MODE_COUNT;
+                g.clear();
+                refreshOverlay();
+            }
+        }
+        return CCKeyboardDispatcher::dispatchKeyboardMSG(key, isKeyDown, isKeyRepeat);
+    }
+};
